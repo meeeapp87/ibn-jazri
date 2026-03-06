@@ -179,6 +179,12 @@ export function Reports({ onBack }: ReportsProps) {
     name: string;
   } | null>(null);
 
+  // مودال تفاصيل التميز (من قسم التعزيز)
+  const [selectedExcellenceStudent, setSelectedExcellenceStudent] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+
   // ✅ مودال: أسماء الطلاب داخل مستوى/جزء معين
   const [selectedLevelModal, setSelectedLevelModal] = useState<{
     level: string;
@@ -417,7 +423,7 @@ export function Reports({ onBack }: ReportsProps) {
 
     const map: Record<
       string,
-      { studentId: string; name: string; sum: number; count: number }
+      { studentId: string; name: string; sum: number; count: number; excellent: number; veryGood: number }
     > = {};
 
     for (const ev of evalRows as any[]) {
@@ -426,11 +432,20 @@ export function Reports({ onBack }: ReportsProps) {
       const name = getStudentName(ev.studentId);
       const score = gradeToScore(ev.overallGrade);
 
+      const grades = [
+        ev.todayTasks?.newMem?.grade,
+        ev.todayTasks?.reviewNear?.grade,
+        ev.todayTasks?.reviewFar?.grade,
+        ev.overallGrade,
+      ].filter(Boolean);
+
       if (!map[sid]) {
-        map[sid] = { studentId: sid, name, sum: 0, count: 0 };
+        map[sid] = { studentId: sid, name, sum: 0, count: 0, excellent: 0, veryGood: 0 };
       }
       map[sid].sum += score;
       map[sid].count += 1;
+      map[sid].excellent += grades.filter((g) => g === "ممتاز").length;
+      map[sid].veryGood += grades.filter((g) => g === "جيد جدا").length;
     }
 
     const arr = Object.values(map)
@@ -439,7 +454,11 @@ export function Reports({ onBack }: ReportsProps) {
         ...x,
         avg: x.sum / x.count,
       }))
-      .sort((a, b) => b.avg - a.avg)
+      .sort((a, b) => {
+        if (b.excellent !== a.excellent) return b.excellent - a.excellent;
+        if (b.veryGood !== a.veryGood) return b.veryGood - a.veryGood;
+        return b.avg - a.avg;
+      })
       .slice(0, 5);
 
     return arr;
@@ -1232,9 +1251,12 @@ export function Reports({ onBack }: ReportsProps) {
                           className="bg-white/15 backdrop-blur-sm rounded-2xl px-3 py-2 hover:bg-white/25 transition-all duration-200 border border-white/10 flex flex-col gap-2"
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm font-bold">
+                            <button
+                              onClick={() => setSelectedExcellenceStudent({ id: s.studentId, name: s.name })}
+                              className="text-sm font-bold underline decoration-dotted hover:text-yellow-200 text-right"
+                            >
                               #{idx + 1} {s.name}
-                            </span>
+                            </button>
                             <span className="inline-flex items-center gap-1 bg-white/90 text-purple-700 rounded-full px-2 py-0.5 text-xs font-semibold">
                               {s.rate}% <span>حضور</span>
                             </span>
@@ -1307,7 +1329,12 @@ export function Reports({ onBack }: ReportsProps) {
                                 : `#${idx + 1}`}
                             </div>
                             <div className="flex-1">
-                              <p className="font-bold text-base">{s.name}</p>
+                              <button
+                                onClick={() => setSelectedExcellenceStudent({ id: s.studentId, name: s.name })}
+                                className="font-bold text-base underline decoration-dotted hover:text-yellow-200 text-right"
+                              >
+                                {s.name}
+                              </button>
                               <div className="flex items-center gap-2 mt-1">
                                 <div className="flex gap-1">
                                   {[1, 2, 3, 4, 5].map((star) => (
@@ -1329,7 +1356,15 @@ export function Reports({ onBack }: ReportsProps) {
                               </div>
                             </div>
                           </div>
-                          <div className="text-xs text-cyan-100 text-center bg-white/10 rounded-lg py-1">
+                          <div className="flex items-center justify-center gap-2 text-xs mt-1">
+                            <span className="bg-amber-400/80 text-amber-900 font-bold px-2 py-0.5 rounded-full">
+                              ممتاز × {(s as any).excellent}
+                            </span>
+                            <span className="bg-white/30 text-white font-bold px-2 py-0.5 rounded-full">
+                              جيد جداً × {(s as any).veryGood}
+                            </span>
+                          </div>
+                          <div className="text-xs text-cyan-100 text-center bg-white/10 rounded-lg py-1 mt-1">
                             {s.count} تقييم في الفترة المحددة
                           </div>
                         </div>
@@ -1759,6 +1794,21 @@ export function Reports({ onBack }: ReportsProps) {
         />
       )}
 
+      {/* مودال تفاصيل التميز */}
+      {selectedExcellenceStudent && (
+        <ExcellenceDetailModal
+          studentId={selectedExcellenceStudent.id}
+          studentName={selectedExcellenceStudent.name}
+          attendanceRecords={detailed.filter(
+            (r: any) =>
+              r.type === "student" &&
+              r.studentId &&
+              String(r.studentId) === selectedExcellenceStudent.id
+          )}
+          onClose={() => setSelectedExcellenceStudent(null)}
+        />
+      )}
+
       {/* مودال: جميع الطلاب في يوم معيّن */}
       {selectedDay && (
         <DayAttendanceModal
@@ -1948,6 +1998,152 @@ function TeacherDaysModal({
               </tbody>
             </table>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   مودال تفاصيل التميز: حضور + إحصائيات التقدير
+   ============================================================ */
+function ExcellenceDetailModal({
+  studentId,
+  studentName,
+  attendanceRecords,
+  onClose,
+}: {
+  studentId: string;
+  studentName: string;
+  attendanceRecords: any[];
+  onClose: () => void;
+}) {
+  const evaluations =
+    useQuery(api.evaluations.getStudentEvaluations, {
+      studentId: studentId as any,
+      limit: 200,
+    }) || [];
+
+  const presentDays = attendanceRecords.filter(
+    (r: any) => r.status === "حاضر" || r.status === "present"
+  ).length;
+
+  const excellentGrades = ["ممتاز"];
+  const veryGoodGrades = ["جيد جدا"];
+  const goodGrades = ["جيد"];
+
+  const countGrade = (values: string[], grades: string[]) =>
+    values.filter((v) => grades.includes(v)).length;
+
+  const newMemGrades = (evaluations as any[])
+    .map((e) => e.todayTasks?.newMem?.grade)
+    .filter(Boolean);
+
+  const reviewNearGrades = (evaluations as any[])
+    .map((e) => e.todayTasks?.reviewNear?.grade)
+    .filter(Boolean);
+
+  const reviewFarGrades = (evaluations as any[])
+    .map((e) => e.todayTasks?.reviewFar?.grade)
+    .filter(Boolean);
+
+  const overallGrades = (evaluations as any[])
+    .map((e) => e.overallGrade)
+    .filter((g) => g && g !== "غير محدد");
+
+  const stats = [
+    {
+      label: "الحفظ الجديد",
+      icon: "📖",
+      color: "from-emerald-500 to-green-600",
+      light: "bg-emerald-50",
+      total: newMemGrades.length,
+      excellent: countGrade(newMemGrades, excellentGrades),
+      veryGood: countGrade(newMemGrades, veryGoodGrades),
+      good: countGrade(newMemGrades, goodGrades),
+    },
+    {
+      label: "المراجعة القريبة",
+      icon: "🔁",
+      color: "from-blue-500 to-cyan-600",
+      light: "bg-blue-50",
+      total: reviewNearGrades.length,
+      excellent: countGrade(reviewNearGrades, excellentGrades),
+      veryGood: countGrade(reviewNearGrades, veryGoodGrades),
+      good: countGrade(reviewNearGrades, goodGrades),
+    },
+    {
+      label: "المراجعة البعيدة",
+      icon: "🔄",
+      color: "from-purple-500 to-violet-600",
+      light: "bg-purple-50",
+      total: reviewFarGrades.length,
+      excellent: countGrade(reviewFarGrades, excellentGrades),
+      veryGood: countGrade(reviewFarGrades, veryGoodGrades),
+      good: countGrade(reviewFarGrades, goodGrades),
+    },
+    {
+      label: "التقدير العام",
+      icon: "⭐",
+      color: "from-amber-500 to-yellow-600",
+      light: "bg-amber-50",
+      total: overallGrades.length,
+      excellent: countGrade(overallGrades, excellentGrades),
+      veryGood: countGrade(overallGrades, veryGoodGrades),
+      good: countGrade(overallGrades, goodGrades),
+    },
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" dir="rtl">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between border-b px-6 py-4 bg-gradient-to-r from-cyan-50 to-blue-50">
+          <div>
+            <h3 className="text-lg font-bold text-cyan-800">تفاصيل التميز: {studentName}</h3>
+            <p className="text-xs text-gray-500 mt-1">إحصائيات الحضور والتقدير بناءً على جميع التقييمات المسجّلة</p>
+          </div>
+          <button onClick={onClose} className="text-2xl text-gray-400 hover:text-gray-600">×</button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* بطاقة الحضور */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl p-5 text-white text-center">
+              <p className="text-4xl font-extrabold">{presentDays}</p>
+              <p className="text-sm mt-1 text-green-100">يوم حضور مسجّل</p>
+            </div>
+            <div className="bg-gradient-to-br from-cyan-500 to-blue-600 rounded-2xl p-5 text-white text-center">
+              <p className="text-4xl font-extrabold">{(evaluations as any[]).length}</p>
+              <p className="text-sm mt-1 text-cyan-100">إجمالي التقييمات</p>
+            </div>
+          </div>
+
+          {/* إحصائيات التقدير */}
+          <div className="space-y-3">
+            {stats.map((s) => (
+              <div key={s.label} className={`${s.light} rounded-2xl p-4 border border-gray-100`}>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xl">{s.icon}</span>
+                  <span className="font-bold text-gray-800">{s.label}</span>
+                  <span className="mr-auto text-xs text-gray-500 bg-white px-2 py-0.5 rounded-full border">{s.total} تقييم</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                  <div className="bg-white rounded-xl p-3 shadow-sm">
+                    <p className="text-2xl font-extrabold text-amber-600">{s.excellent}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">ممتاز</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 shadow-sm">
+                    <p className="text-2xl font-extrabold text-blue-600">{s.veryGood}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">جيد جداً</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 shadow-sm">
+                    <p className="text-2xl font-extrabold text-green-600">{s.good}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">جيد</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
